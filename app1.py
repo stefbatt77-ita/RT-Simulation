@@ -8,7 +8,7 @@ import pandas as pd
 import io
 
 # --- CONFIGURAZIONE E CSS ---
-st.set_page_config(page_title="Aero-NDT Certification Authority v10.1", layout="wide", page_icon="🎓")
+st.set_page_config(page_title="Aero-NDT Certification Authority v10.2", layout="wide", page_icon="🎓")
 
 st.markdown("""
     <style>
@@ -30,12 +30,9 @@ def get_ideal_parameters(material, thickness):
     props = mat_props[material]
     ideal_kv = int(props["base_kv"] + (thickness * props["k_kv"]))
     ideal_kv = max(40, min(250, ideal_kv))
-    
-    # Target mAs per grigio 32000
     ideal_mas = round(12 * np.exp(thickness * 0.06), 1)
     ideal_level = 32768
     ideal_width = 25000
-    
     return ideal_kv, ideal_mas, ideal_level, ideal_width
 
 def generate_scan_v10(kv, ma, time, material, thickness, chosen_defect=None):
@@ -45,6 +42,17 @@ def generate_scan_v10(kv, ma, time, material, thickness, chosen_defect=None):
     mu = mu_map[material] * (120/safe_kv)**1.5
     m_sp = np.full((size, size), float(thickness), dtype=float)
     
+    # 1. IQI A FILI (ISO 19232-1) - Posizionati in alto
+    # Simuliamo 7 fili con diametri decrescenti
+    for i in range(7):
+        m_sp[50:150, 100 + i*40 : 100 + i*40 + 2] += (0.4 - i*0.05)
+
+    # 2. DUPLEX IQI (ISO 19232-5) - Posizionati in basso per risoluzione spaziale
+    # Coppie di fili sempre più vicine
+    for i in range(13): 
+        m_sp[500:540, 100 + i*30 : 100 + i*30 + 2] += (0.8 / (i+1))
+
+    # 3. DIFETTO
     if not chosen_defect:
         defects = ["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Incisione Marginale", "Mancata Fusione"]
         chosen_defect = random.choice(defects)
@@ -52,10 +60,10 @@ def generate_scan_v10(kv, ma, time, material, thickness, chosen_defect=None):
     bbox = {"x": 300, "y": 300, "w": 50, "h": 50}
     if chosen_defect == "Cricca":
         curr_x = 300
-        for y in range(200, 400):
+        for y in range(250, 450):
             m_sp[y, int(curr_x)] -= 0.6
             curr_x += random.uniform(-0.6, 0.6)
-        bbox = {"x": 280, "y": 200, "w": 40, "h": 200}
+        bbox = {"x": 280, "y": 250, "w": 40, "h": 200}
     elif chosen_defect == "Porosità Singola":
         y, x = np.ogrid[:size, :size]
         m_sp[(x-300)**2 + (y-300)**2 <= 6**2] -= 2.5
@@ -104,6 +112,8 @@ with st.sidebar:
 # ==============================================================================
 if st.session_state['mode'] == "STUDIO (Training)":
     st.title("📘 Ambiente di Studio")
+    st.caption("Analizza la sensibilità con IQI (Alto) e la risoluzione con Duplex (Basso).")
+    
     col1, col2 = st.columns([1, 2])
     
     with col1:
@@ -124,11 +134,13 @@ if st.session_state['mode'] == "STUDIO (Training)":
             lev = st.slider("Level", 0, 65535, 32768)
             wid = st.slider("Width", 100, 65535, 60000)
             
-            fig, ax = plt.subplots(facecolor='black')
+            fig, ax = plt.subplots(facecolor='black', figsize=(8, 8))
             ax.imshow(st.session_state['study_data'], cmap='gray_r', vmin=lev-wid//2, vmax=lev+wid//2)
+            
             if st.session_state.get('study_evaluated'):
                 b = st.session_state['study_truth']['bbox']
                 if b: ax.add_patch(patches.Rectangle((b['x'], b['y']), b['w'], b['h'], linewidth=2, edgecolor='red', facecolor='none', linestyle='--'))
+            
             ax.axis('off')
             st.pyplot(fig)
             
@@ -154,7 +166,7 @@ if st.session_state['mode'] == "STUDIO (Training)":
                 st.table(comparison)
 
 # ==============================================================================
-# SEZIONE 2: MODALITÀ ESAME
+# SEZIONE 2: MODALITÀ ESAME (Mantiene la stessa logica)
 # ==============================================================================
 elif st.session_state['mode'] == "ESAME (Certificazione)":
     st.title("🎓 Sessione d'Esame")
@@ -171,7 +183,6 @@ elif st.session_state['mode'] == "ESAME (Certificazione)":
         df_res = pd.DataFrame(st.session_state['exam_results'])
         if not df_res.empty:
             st.table(df_res)
-            # Verifica sicura della colonna Diagnosi
             if "Diagnosi" in df_res.columns:
                 punteggio = df_res[df_res["Diagnosi"] == "CORRETTO"].shape[0]
                 st.metric("Difetti Identificati", f"{punteggio} / 5")
@@ -199,7 +210,7 @@ elif st.session_state['mode'] == "ESAME (Certificazione)":
             if 'e_img' in st.session_state:
                 l_e = st.slider("L", 0, 65535, 32768, key=f"l{idx}")
                 w_e = st.slider("W", 100, 65535, 60000, key=f"w{idx}")
-                fig, ax = plt.subplots(facecolor='black')
+                fig, ax = plt.subplots(facecolor='black', figsize=(6,6))
                 ax.imshow(st.session_state['e_img'], cmap='gray_r', vmin=l_e-w_e//2, vmax=l_e+w_e//2)
                 ax.axis('off')
                 st.pyplot(fig)
