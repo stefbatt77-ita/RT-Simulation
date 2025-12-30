@@ -7,7 +7,8 @@ import random
 import pandas as pd
 
 # --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="Aero-NDT Ultimate v10.7", layout="wide", page_icon=✈️")
+# NOTA: L'emoji deve essere tra virgolette " "
+st.set_page_config(page_title="Aero-NDT Ultimate v10.8", layout="wide", page_icon="✈️")
 
 st.markdown("""
     <style>
@@ -100,7 +101,6 @@ def generate_scan_final(kv, ma, time, material, thickness, selected_defect=None)
 
         elif d_type == "Porosità Singola":
             y, x = np.ogrid[:size, :size]
-            # CORREZIONE ERRORE: La formula deve essere chiusa correttamente
             mask = (x - rx)**2 + (y - ry)**2 <= 6**2
             m_sp[mask] -= 2.5
             bboxes.append({"x": rx-10, "y": ry-10, "w": 20, "h": 20, "t": "Porosità"})
@@ -180,4 +180,96 @@ if st.session_state['mode'] == "STUDIO (Training)":
         if st.session_state.s_img is not None:
             c_l, c_w = st.columns(2)
             lev = c_l.slider("Livello (L)", 0, 65535, 32768)
-            wid = c_w.slider("Finestra (W)", 100, 65
+            wid = c_w.slider("Finestra (W)", 100, 65535, 40000)
+            
+            fig, ax = plt.subplots(figsize=(8,8), facecolor='black')
+            vmin, vmax = lev - wid//2, lev + wid//2
+            ax.imshow(st.session_state.s_img, cmap='gray_r', vmin=vmin, vmax=vmax)
+            ax.text(85, 135, "ISO W10", color='white', alpha=0.5, fontsize=8)
+            ax.text(155, 535, "DUPLEX IQI", color='white', alpha=0.5, fontsize=8)
+
+            if st.session_state.s_eval:
+                for b in st.session_state.s_bboxes:
+                    rect = patches.Rectangle((b['x'], b['y']), b['w'], b['h'], linewidth=2, edgecolor='red', facecolor='none', linestyle='--')
+                    ax.add_patch(rect)
+                    ax.text(b['x'], b['y']-5, b['t'], color='red', fontsize=10, fontweight='bold')
+            ax.axis('off')
+            st.pyplot(fig)
+            
+            if st.button("VERIFICA E MOSTRA PARAMETRI IDEALI"):
+                st.session_state.s_eval = True
+                st.rerun()
+
+            if st.session_state.s_eval:
+                id_k, id_m = get_ideal_params(mat, thick)
+                st.divider()
+                st.subheader("📊 Analisi Tecnica")
+                res_data = {
+                    "Parametro": ["Tensione (kV)", "Esposizione (mAs)"],
+                    "Tuo Valore": [f"{kv}", f"{ma*ti:.1f}"],
+                    "Ideale (Calc)": [f"{id_k}", f"{id_m}"],
+                    "Valutazione": [grade_param(kv, id_k), grade_param(ma*ti, id_m)]
+                }
+                st.table(pd.DataFrame(res_data))
+                st.info(f"**Difetti Reali:** {', '.join(st.session_state.s_defs) if st.session_state.s_defs else 'Pezzo Sano'}")
+
+# === MODALITÀ ESAME ===
+elif st.session_state['mode'] == "ESAME (Certificazione)":
+    st.title("🎓 Esame di Certificazione EN4179")
+    
+    if st.session_state.exam_progress == 0:
+        if st.button("INIZIA ESAME (5 Casi)"):
+            st.session_state.exam_cases = [{"mat": random.choice(["Ti-6Al-4V", "Steel 17-4 PH", "Inconel 718"]), "thick": random.randint(8, 25), "defect": random.choice(["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione"])} for _ in range(5)]
+            st.session_state.exam_progress = 1
+            st.rerun()
+
+    elif st.session_state.exam_progress > 5:
+        st.header("🏁 Risultati Finali")
+        if st.session_state.exam_results:
+            df = pd.DataFrame(st.session_state.exam_results)
+            st.table(df)
+            corr = df[df["Diagnosi"] == "CORRETTO"].shape[0]
+            st.metric("Punteggio Diagnostico", f"{corr} / 5")
+        if st.button("NUOVA SESSIONE"):
+            st.session_state.exam_progress = 0
+            st.session_state.exam_results = []
+            st.rerun()
+
+    else:
+        idx = st.session_state.exam_progress
+        case = st.session_state.exam_cases[idx-1]
+        st.subheader(f"Caso {idx} di 5")
+        st.info(f"Specimen: **{case['mat']}**, Spessore: **{case['thick']} mm**")
+        
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            kve = st.slider("kV", 40, 250, 100, key=f"ke{idx}")
+            mae = st.slider("mA", 1.0, 15.0, 5.0, key=f"me{idx}")
+            tie = st.slider("Tempo (s)", 1, 120, 20, key=f"te{idx}")
+            if st.button("SCATTA"):
+                img, defs, bboxes = generate_scan_final(kve, mae, tie, case['mat'], case['thick'], case['defect'])
+                st.session_state.e_img = img
+                st.session_state.e_defs = defs
+        
+        with c2:
+            if st.session_state.get('e_img') is not None:
+                le, we = st.slider("L", 0, 65535, 32768, key=f"le{idx}"), st.slider("W", 100, 65535, 40000, key=f"we{idx}")
+                fig, ax = plt.subplots(facecolor='black')
+                ax.imshow(st.session_state.e_img, cmap='gray_r', vmin=le-we//2, vmax=le+we//2)
+                ax.axis('off')
+                st.pyplot(fig)
+                sel_defs = st.multiselect("Difetti Rilevati:", ["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione"], key=f"sel{idx}")
+                if st.button("CONFERMA E PROCEDI"):
+                    id_k, id_m = get_ideal_params(case['mat'], case['thick'])
+                    correct = set(sel_defs) == set(st.session_state.e_defs)
+                    st.session_state.exam_results.append({
+                        "Caso": idx,
+                        "Materiale": case['mat'],
+                        "kV Voto": grade_param(kve, id_k),
+                        "mAs Voto": grade_param(mae*tie, id_m),
+                        "Diagnosi": "CORRETTO" if correct else "ERRATO",
+                        "Realtà": ", ".join(st.session_state.e_defs)
+                    })
+                    st.session_state.exam_progress += 1
+                    st.session_state.e_img = None
+                    st.rerun()
