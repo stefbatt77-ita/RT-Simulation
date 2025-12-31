@@ -7,7 +7,7 @@ import random
 import pandas as pd
 
 # --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="Aero-NDT Ultimate v10.9", layout="wide", page_icon="✈️")
+st.set_page_config(page_title="Aero-NDT Ultimate v11.0", layout="wide", page_icon="✈️")
 
 st.markdown("""
     <style>
@@ -23,7 +23,7 @@ st.markdown("""
 keys_to_init = [
     'exam_progress', 'exam_results', 'exam_cases', 'current_case',
     's_img', 's_bboxes', 's_defs', 's_eval', 'mode',
-    'e_img', 'e_defs'
+    'e_img', 'e_defs', 'e_iqi_type'
 ]
 for key in keys_to_init:
     if key not in st.session_state:
@@ -47,7 +47,7 @@ def get_ideal_params(material, thickness):
     id_mas = round(12 * np.exp(thickness * 0.06), 1)
     return id_kv, id_mas
 
-def generate_scan_final(kv, ma, time, material, thickness, selected_defect="Casuale (Multiplo)"):
+def generate_scan_v11(kv, ma, time, material, thickness, selected_defect=None, iqi_mode="ISO 19232-1 (Fili)"):
     size = 600
     mu_map = {"Al-2024 (Avional)": 0.02, "Ti-6Al-4V": 0.045, "Inconel 718": 0.09, "Steel 17-4 PH": 0.075}
     safe_kv = max(10, kv)
@@ -55,22 +55,43 @@ def generate_scan_final(kv, ma, time, material, thickness, selected_defect="Casu
     
     m_sp = np.full((size, size), float(thickness), dtype=float)
     
-    # IQI
-    for i in range(7):
-        m_sp[40:140, 80 + i*40 : 80 + i*40 + 2] += (0.4 - i*0.05)
+    # --- 1. GENERAZIONE IQI ---
+    if iqi_mode == "ISO 19232-1 (Fili)":
+        # 7 fili decrescenti (Aggiungono spessore -> Più chiari in negativo)
+        for i in range(7):
+            m_sp[40:140, 80 + i*40 : 80 + i*40 + 2] += (0.4 - i*0.05)
+        # Simulazione "ombra" etichetta piombo
+        # Non modifichiamo m_sp per il testo, lo faremo con matplotlib per leggibilità,
+        # ma creiamo una base rettangolare per l'etichetta
+        m_sp[145:160, 80:150] += 0.1 
+
+    elif iqi_mode == "ASTM E1025 (Fori)":
+        # Placchetta rettangolare (Aggiunge spessore)
+        # Spessore placca ~ 2% del pezzo (es. 0.2mm su 10mm)
+        plaque_t = max(0.1, thickness * 0.02)
+        m_sp[50:110, 60:180] += plaque_t 
+        
+        # 3 Fori: 1T, 2T, 4T (Tolgon spessore placca)
+        diameters = [plaque_t, plaque_t*2, plaque_t*4]
+        positions = [80, 110, 150]
+        
+        y, x = np.ogrid[:size, :size]
+        for d, px in zip(diameters, positions):
+            r = max(2, (d/0.05)/2) # Raggio in pixel (simulato)
+            # Moltiplichiamo raggio per visualizzazione didattica (altrimenti invisibili su schermo piccolo)
+            r_vis = r * 3 
+            mask = (x - px)**2 + (y - 80)**2 <= r_vis**2
+            m_sp[mask] -= plaque_t # Buco nella placca
+
+    # --- 2. DUPLEX (Sempre presente) ---
     for i in range(13):
         m_sp[500:540, 150 + i*25 : 150 + i*25 + 2] += (0.7 / (i+1))
 
-    # Etichette
-    m_sp[145:155, 80:120] -= 0.5
-    m_sp[545:555, 150:200] -= 0.5
-
-    # DIFETTI
+    # --- 3. DIFETTI ---
     defects_list = []
     bboxes = []
     
     to_generate = []
-    # Generazione sempre randomica se "Casuale (Multiplo)"
     if selected_defect == "Casuale (Multiplo)":
         num = random.randint(1, 3)
         possibles = ["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione"]
@@ -159,26 +180,28 @@ with st.sidebar:
 # === MODALITÀ STUDIO ===
 if st.session_state['mode'] == "STUDIO (Training)":
     st.title("📘 Ambiente di Studio Avanzato")
-    st.info("I difetti sono generati casualmente. Regola i parametri per trovarli, poi clicca Verifica per vedere la soluzione.")
     c1, c2 = st.columns([1, 2])
     with c1:
         st.subheader("Parametri Scansione")
         mat = st.selectbox("Materiale", ["Al-2024 (Avional)", "Ti-6Al-4V", "Inconel 718", "Steel 17-4 PH"])
         thick = st.number_input("Spessore (mm)", 5, 30, 10)
-        # NOTA: Rimossa la scelta manuale del difetto per forzare il random
+        # SELETTORE IQI PER STUDIO
+        iqi_select = st.radio("Tipo IQI", ["ISO 19232-1 (Fili)", "ASTM E1025 (Fori)"])
+        
+        def_choice = st.selectbox("Difetto Simulato", ["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione", "Casuale (Multiplo)", "Nessun Difetto"])
         
         st.divider()
         kv = st.slider("kV", 40, 250, 90)
         ma = st.slider("mA", 1.0, 15.0, 5.0)
         ti = st.slider("Tempo (s)", 1, 120, 25)
         
-        if st.button("ACQUISICI SCANSIONE (DIFETTI RANDOM)"):
-            # Forza la generazione casuale multipla
-            img, defs, bboxes = generate_scan_final(kv, ma, ti, mat, thick, "Casuale (Multiplo)")
+        if st.button("ACQUISICI SCANSIONE"):
+            img, defs, bboxes = generate_scan_v11(kv, ma, ti, mat, thick, def_choice, iqi_select)
             st.session_state.s_img = img
             st.session_state.s_bboxes = bboxes
             st.session_state.s_defs = defs
             st.session_state.s_eval = False
+            st.session_state.s_iqi_type = iqi_select # Salva per visualizzazione
 
     with c2:
         if st.session_state.s_img is not None:
@@ -189,8 +212,16 @@ if st.session_state['mode'] == "STUDIO (Training)":
             fig, ax = plt.subplots(figsize=(8,8), facecolor='black')
             vmin, vmax = lev - wid//2, lev + wid//2
             ax.imshow(st.session_state.s_img, cmap='gray_r', vmin=vmin, vmax=vmax)
-            ax.text(85, 135, "ISO W10", color='white', alpha=0.5, fontsize=8)
-            ax.text(155, 535, "DUPLEX IQI", color='white', alpha=0.5, fontsize=8)
+            
+            # --- ETICHETTE VISUALI SULLA RADIOGRAFIA ---
+            # Duplex (sempre presente)
+            ax.text(155, 565, "DUPLEX EN 462-5", color='white', alpha=0.7, fontsize=9, weight='bold')
+            
+            # IQI Selezionato
+            if st.session_state.s_iqi_type == "ISO 19232-1 (Fili)":
+                ax.text(85, 165, "ISO W10 FE", color='white', alpha=0.7, fontsize=9, weight='bold')
+            else:
+                ax.text(60, 45, "ASTM 2-2T", color='white', alpha=0.7, fontsize=9, weight='bold')
 
             if st.session_state.s_eval:
                 for b in st.session_state.s_bboxes:
@@ -200,37 +231,25 @@ if st.session_state['mode'] == "STUDIO (Training)":
             ax.axis('off')
             st.pyplot(fig)
             
-            st.divider()
-            # Input per autovalutazione prima di vedere la soluzione
+            # Input Diagnosi
             st.multiselect("Fai la tua diagnosi (Opzionale):", ["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione"], key="study_guess")
             
-            if st.button("VERIFICA E MOSTRA SOLUZIONE"):
+            if st.button("VERIFICA E MOSTRA PARAMETRI IDEALI"):
                 st.session_state.s_eval = True
                 st.rerun()
 
             if st.session_state.s_eval:
                 id_k, id_m = get_ideal_params(mat, thick)
                 st.divider()
-                st.subheader("📊 Analisi Tecnica e Soluzione")
-                
-                col_res1, col_res2 = st.columns(2)
-                with col_res1:
-                    st.write("#### Parametri Tecnici")
-                    res_data = {
-                        "Parametro": ["Tensione (kV)", "Esposizione (mAs)"],
-                        "Tuo Valore": [f"{kv}", f"{ma*ti:.1f}"],
-                        "Ideale (Calc)": [f"{id_k}", f"{id_m}"],
-                        "Valutazione": [grade_param(kv, id_k), grade_param(ma*ti, id_m)]
-                    }
-                    st.table(pd.DataFrame(res_data))
-                
-                with col_res2:
-                    st.write("#### Difetti Rilevati")
-                    if st.session_state.s_defs:
-                        for d in st.session_state.s_defs:
-                            st.error(f"⚠️ {d}")
-                    else:
-                        st.success("✅ Nessun Difetto (Pezzo Sano)")
+                st.subheader("📊 Analisi Tecnica")
+                res_data = {
+                    "Parametro": ["Tensione (kV)", "Esposizione (mAs)"],
+                    "Tuo Valore": [f"{kv}", f"{ma*ti:.1f}"],
+                    "Ideale (Calc)": [f"{id_k}", f"{id_m}"],
+                    "Valutazione": [grade_param(kv, id_k), grade_param(ma*ti, id_m)]
+                }
+                st.table(pd.DataFrame(res_data))
+                st.info(f"**Difetti Reali:** {', '.join(st.session_state.s_defs) if st.session_state.s_defs else 'Pezzo Sano'}")
 
 # === MODALITÀ ESAME ===
 elif st.session_state['mode'] == "ESAME (Certificazione)":
@@ -238,7 +257,13 @@ elif st.session_state['mode'] == "ESAME (Certificazione)":
     
     if st.session_state.exam_progress == 0:
         if st.button("INIZIA ESAME (5 Casi)"):
-            st.session_state.exam_cases = [{"mat": random.choice(["Ti-6Al-4V", "Steel 17-4 PH", "Inconel 718"]), "thick": random.randint(8, 25), "defect": "Casuale (Multiplo)"} for _ in range(5)]
+            # Genera casi con IQI random per aumentare la difficoltà
+            st.session_state.exam_cases = [{
+                "mat": random.choice(["Ti-6Al-4V", "Steel 17-4 PH", "Inconel 718"]), 
+                "thick": random.randint(8, 25), 
+                "defect": "Casuale (Multiplo)",
+                "iqi_mode": random.choice(["ISO 19232-1 (Fili)", "ASTM E1025 (Fori)"])
+            } for _ in range(5)]
             st.session_state.exam_progress = 1
             st.rerun()
 
@@ -258,7 +283,7 @@ elif st.session_state['mode'] == "ESAME (Certificazione)":
         idx = st.session_state.exam_progress
         case = st.session_state.exam_cases[idx-1]
         st.subheader(f"Caso {idx} di 5")
-        st.info(f"Specimen: **{case['mat']}**, Spessore: **{case['thick']} mm**")
+        st.info(f"Specimen: **{case['mat']}**, Spessore: **{case['thick']} mm** | IQI Richiesto: **{case['iqi_mode']}**")
         
         c1, c2 = st.columns([1, 2])
         with c1:
@@ -266,17 +291,27 @@ elif st.session_state['mode'] == "ESAME (Certificazione)":
             mae = st.slider("mA", 1.0, 15.0, 5.0, key=f"me{idx}")
             tie = st.slider("Tempo (s)", 1, 120, 20, key=f"te{idx}")
             if st.button("SCATTA"):
-                img, defs, bboxes = generate_scan_final(kve, mae, tie, case['mat'], case['thick'], case['defect'])
+                img, defs, bboxes = generate_scan_v11(kve, mae, tie, case['mat'], case['thick'], case['defect'], case['iqi_mode'])
                 st.session_state.e_img = img
                 st.session_state.e_defs = defs
+                st.session_state.e_iqi_type = case['iqi_mode']
         
         with c2:
             if st.session_state.get('e_img') is not None:
                 le, we = st.slider("L", 0, 65535, 32768, key=f"le{idx}"), st.slider("W", 100, 65535, 40000, key=f"we{idx}")
                 fig, ax = plt.subplots(facecolor='black')
                 ax.imshow(st.session_state.e_img, cmap='gray_r', vmin=le-we//2, vmax=le+we//2)
+                
+                # Etichette Esame
+                ax.text(155, 565, "DUPLEX EN 462-5", color='white', alpha=0.7, fontsize=9, weight='bold')
+                if st.session_state.e_iqi_type == "ISO 19232-1 (Fili)":
+                    ax.text(85, 165, "ISO W10 FE", color='white', alpha=0.7, fontsize=9, weight='bold')
+                else:
+                    ax.text(60, 45, "ASTM 2-2T", color='white', alpha=0.7, fontsize=9, weight='bold')
+
                 ax.axis('off')
                 st.pyplot(fig)
+                
                 sel_defs = st.multiselect("Difetti Rilevati:", ["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione"], key=f"sel{idx}")
                 if st.button("CONFERMA E PROCEDI"):
                     id_k, id_m = get_ideal_params(case['mat'], case['thick'])
