@@ -7,8 +7,7 @@ import random
 import pandas as pd
 
 # --- CONFIGURAZIONE PAGINA ---
-# NOTA: L'emoji deve essere tra virgolette " "
-st.set_page_config(page_title="Aero-NDT Ultimate v10.8", layout="wide", page_icon="✈️")
+st.set_page_config(page_title="Aero-NDT Ultimate v10.9", layout="wide", page_icon="✈️")
 
 st.markdown("""
     <style>
@@ -48,7 +47,7 @@ def get_ideal_params(material, thickness):
     id_mas = round(12 * np.exp(thickness * 0.06), 1)
     return id_kv, id_mas
 
-def generate_scan_final(kv, ma, time, material, thickness, selected_defect=None):
+def generate_scan_final(kv, ma, time, material, thickness, selected_defect="Casuale (Multiplo)"):
     size = 600
     mu_map = {"Al-2024 (Avional)": 0.02, "Ti-6Al-4V": 0.045, "Inconel 718": 0.09, "Steel 17-4 PH": 0.075}
     safe_kv = max(10, kv)
@@ -71,6 +70,7 @@ def generate_scan_final(kv, ma, time, material, thickness, selected_defect=None)
     bboxes = []
     
     to_generate = []
+    # Generazione sempre randomica se "Casuale (Multiplo)"
     if selected_defect == "Casuale (Multiplo)":
         num = random.randint(1, 3)
         possibles = ["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione"]
@@ -159,18 +159,22 @@ with st.sidebar:
 # === MODALITÀ STUDIO ===
 if st.session_state['mode'] == "STUDIO (Training)":
     st.title("📘 Ambiente di Studio Avanzato")
+    st.info("I difetti sono generati casualmente. Regola i parametri per trovarli, poi clicca Verifica per vedere la soluzione.")
     c1, c2 = st.columns([1, 2])
     with c1:
         st.subheader("Parametri Scansione")
         mat = st.selectbox("Materiale", ["Al-2024 (Avional)", "Ti-6Al-4V", "Inconel 718", "Steel 17-4 PH"])
         thick = st.number_input("Spessore (mm)", 5, 30, 10)
-        def_choice = st.selectbox("Difetto Simulato", ["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione", "Casuale (Multiplo)", "Nessun Difetto"])
+        # NOTA: Rimossa la scelta manuale del difetto per forzare il random
+        
         st.divider()
         kv = st.slider("kV", 40, 250, 90)
         ma = st.slider("mA", 1.0, 15.0, 5.0)
         ti = st.slider("Tempo (s)", 1, 120, 25)
-        if st.button("ACQUISICI SCANSIONE"):
-            img, defs, bboxes = generate_scan_final(kv, ma, ti, mat, thick, def_choice)
+        
+        if st.button("ACQUISICI SCANSIONE (DIFETTI RANDOM)"):
+            # Forza la generazione casuale multipla
+            img, defs, bboxes = generate_scan_final(kv, ma, ti, mat, thick, "Casuale (Multiplo)")
             st.session_state.s_img = img
             st.session_state.s_bboxes = bboxes
             st.session_state.s_defs = defs
@@ -196,22 +200,37 @@ if st.session_state['mode'] == "STUDIO (Training)":
             ax.axis('off')
             st.pyplot(fig)
             
-            if st.button("VERIFICA E MOSTRA PARAMETRI IDEALI"):
+            st.divider()
+            # Input per autovalutazione prima di vedere la soluzione
+            st.multiselect("Fai la tua diagnosi (Opzionale):", ["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione"], key="study_guess")
+            
+            if st.button("VERIFICA E MOSTRA SOLUZIONE"):
                 st.session_state.s_eval = True
                 st.rerun()
 
             if st.session_state.s_eval:
                 id_k, id_m = get_ideal_params(mat, thick)
                 st.divider()
-                st.subheader("📊 Analisi Tecnica")
-                res_data = {
-                    "Parametro": ["Tensione (kV)", "Esposizione (mAs)"],
-                    "Tuo Valore": [f"{kv}", f"{ma*ti:.1f}"],
-                    "Ideale (Calc)": [f"{id_k}", f"{id_m}"],
-                    "Valutazione": [grade_param(kv, id_k), grade_param(ma*ti, id_m)]
-                }
-                st.table(pd.DataFrame(res_data))
-                st.info(f"**Difetti Reali:** {', '.join(st.session_state.s_defs) if st.session_state.s_defs else 'Pezzo Sano'}")
+                st.subheader("📊 Analisi Tecnica e Soluzione")
+                
+                col_res1, col_res2 = st.columns(2)
+                with col_res1:
+                    st.write("#### Parametri Tecnici")
+                    res_data = {
+                        "Parametro": ["Tensione (kV)", "Esposizione (mAs)"],
+                        "Tuo Valore": [f"{kv}", f"{ma*ti:.1f}"],
+                        "Ideale (Calc)": [f"{id_k}", f"{id_m}"],
+                        "Valutazione": [grade_param(kv, id_k), grade_param(ma*ti, id_m)]
+                    }
+                    st.table(pd.DataFrame(res_data))
+                
+                with col_res2:
+                    st.write("#### Difetti Rilevati")
+                    if st.session_state.s_defs:
+                        for d in st.session_state.s_defs:
+                            st.error(f"⚠️ {d}")
+                    else:
+                        st.success("✅ Nessun Difetto (Pezzo Sano)")
 
 # === MODALITÀ ESAME ===
 elif st.session_state['mode'] == "ESAME (Certificazione)":
@@ -219,7 +238,7 @@ elif st.session_state['mode'] == "ESAME (Certificazione)":
     
     if st.session_state.exam_progress == 0:
         if st.button("INIZIA ESAME (5 Casi)"):
-            st.session_state.exam_cases = [{"mat": random.choice(["Ti-6Al-4V", "Steel 17-4 PH", "Inconel 718"]), "thick": random.randint(8, 25), "defect": random.choice(["Cricca", "Porosità Singola", "Cluster Porosità", "Inclusione Tungsteno", "Mancata Fusione"])} for _ in range(5)]
+            st.session_state.exam_cases = [{"mat": random.choice(["Ti-6Al-4V", "Steel 17-4 PH", "Inconel 718"]), "thick": random.randint(8, 25), "defect": "Casuale (Multiplo)"} for _ in range(5)]
             st.session_state.exam_progress = 1
             st.rerun()
 
@@ -268,7 +287,7 @@ elif st.session_state['mode'] == "ESAME (Certificazione)":
                         "kV Voto": grade_param(kve, id_k),
                         "mAs Voto": grade_param(mae*tie, id_m),
                         "Diagnosi": "CORRETTO" if correct else "ERRATO",
-                        "Realtà": ", ".join(st.session_state.e_defs)
+                        "Realtà": ", ".join(st.session_state.e_defs) if st.session_state.e_defs else "Sano"
                     })
                     st.session_state.exam_progress += 1
                     st.session_state.e_img = None
